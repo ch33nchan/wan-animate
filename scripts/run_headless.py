@@ -438,6 +438,18 @@ def fixup_schema_mismatches(
                     inputs["add_noise_to_samples"] = False
                     inputs["shift"]                = float(wv[2]) if isinstance(wv[2], (int, float)) else 5.0
 
+            # Ensure start_step < end_step
+            steps_val = inputs.get("steps")
+            start_val = inputs.get("start_step", 0)
+            end_val   = inputs.get("end_step", steps_val if isinstance(steps_val, int) else start_val + 1)
+            if isinstance(start_val, int) and isinstance(end_val, int):
+                if end_val <= start_val:
+                    if isinstance(steps_val, int) and steps_val > start_val:
+                        end_val = steps_val
+                    else:
+                        end_val = start_val + 1
+                    inputs["end_step"] = end_val
+
         elif cls == "WanVideoAnimateEmbeds":
             # Old schema had: width, height, num_frames, use_zero_padding,
             #                 frame_window_size, noise_aug_strength, latent_strength,
