@@ -106,6 +106,7 @@ def patch_nodes(
     output_nodes = find_nodes(nmap, "VHS_VideoCombine")
     sampler_nodes = find_nodes(nmap, "WanVideoSampler")
     lora_nodes = find_nodes(nmap, "WanVideoLoraSelectMulti")
+    detect_nodes = find_nodes(nmap, "OnnxDetectionModelLoader")
 
     if not video_nodes:
         raise RuntimeError("VHS_LoadVideo node not found")
@@ -159,6 +160,17 @@ def patch_nodes(
                 idx = i * 2
                 if idx < len(lora_wv):
                     lora_wv[idx] = "none"
+
+    # Detection models: force known good filenames
+    for nid in detect_nodes:
+        wv = nmap[nid].get("widgets_values", [])
+        if isinstance(wv, list):
+            if len(wv) >= 1:
+                wv[0] = "vitpose-l-wholebody.onnx"
+            if len(wv) >= 2:
+                wv[1] = "yolov10m.onnx"
+            if len(wv) >= 3:
+                wv[2] = "CUDAExecutionProvider"
 
 
 # ---------------------------------------------------------------------------
