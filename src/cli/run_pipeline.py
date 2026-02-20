@@ -136,10 +136,21 @@ def main() -> None:
     t4 = time.perf_counter()
 
     stage2_events = []
+    stage2_replaced_frames = 0
     output_frames = stage1_frames
     if args.mode == "stage2":
-        stage2 = FullCharacterReplacer(config.fallback)
-        output_frames, stage2_events = stage2.apply(stage1_frames, tracking, selection.selected_track_id)
+        stage2 = FullCharacterReplacer(
+            stage2_cfg=config.stage2,
+            fallback_cfg=config.fallback,
+            temporal_alpha=config.blend.temporal_alpha,
+            device=args.device,
+        )
+        output_frames, stage2_events, stage2_replaced_frames = stage2.apply(
+            stage1_frames=stage1_frames,
+            tracking_result=tracking,
+            target_track_id=selection.selected_track_id,
+            ref_image_path=args.ref,
+        )
 
     t5 = time.perf_counter()
 
@@ -186,6 +197,7 @@ def main() -> None:
         },
         "stage2": {
             "enabled": args.mode == "stage2",
+            "replaced_frames": stage2_replaced_frames,
             "fallback_events": [event.__dict__ for event in stage2_events],
         },
         "timing_sec": {

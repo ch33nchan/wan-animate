@@ -10,6 +10,7 @@ def test_default_config_loads() -> None:
     assert isinstance(cfg, PipelineConfig)
     assert cfg.detector.model == "yolov8n.pt"
     assert cfg.gemini.keyframes == 3
+    assert cfg.stage2.seg_model == "yolov8n-seg.pt"
 
 
 def test_yaml_override(tmp_path: Path) -> None:

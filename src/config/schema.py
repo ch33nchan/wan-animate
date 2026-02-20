@@ -46,6 +46,15 @@ class BlendConfig(BaseModel):
     use_seamless_clone: bool = True
 
 
+class Stage2Config(BaseModel):
+    seg_model: str = "yolov8n-seg.pt"
+    seg_conf: float = Field(default=0.25, ge=0.0, le=1.0)
+    mask_blur: int = Field(default=13, ge=1)
+    overlay_alpha: float = Field(default=0.95, ge=0.0, le=1.0)
+    min_mask_pixels: int = Field(default=500, ge=1)
+    use_bbox_mask_fallback: bool = True
+
+
 class RenderConfig(BaseModel):
     ffmpeg_bin: str = "ffmpeg"
     video_codec: str = "libx264"
@@ -65,6 +74,7 @@ class PipelineConfig(BaseModel):
     gemini: GeminiConfig = GeminiConfig()
     swap: SwapConfig = SwapConfig()
     blend: BlendConfig = BlendConfig()
+    stage2: Stage2Config = Stage2Config()
     render: RenderConfig = RenderConfig()
     fallback: FallbackConfig = FallbackConfig()
 
