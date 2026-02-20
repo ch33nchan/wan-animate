@@ -73,6 +73,7 @@ class PersonDetector:
     def __init__(self, cfg: DetectorConfig) -> None:
         self.cfg = cfg
         self._model = None
+        self._retried_on_cpu = False
 
     def _load(self) -> None:
         if self._model is not None:
@@ -83,14 +84,35 @@ class PersonDetector:
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         self._load()
-        results = self._model.predict(
-            source=frame,
-            conf=self.cfg.conf,
-            iou=self.cfg.iou,
-            classes=[self.cfg.person_class_id],
-            device=self.cfg.device,
-            verbose=False,
-        )
+        device = self.cfg.device
+        if device == "cuda":
+            device = "cuda:0"
+        try:
+            results = self._model.predict(
+                source=frame,
+                conf=self.cfg.conf,
+                iou=self.cfg.iou,
+                classes=[self.cfg.person_class_id],
+                device=device,
+                verbose=False,
+            )
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "out of memory" in msg and "cuda" in msg and not self._retried_on_cpu:
+                self._retried_on_cpu = True
+                self.cfg.device = "cpu"
+                self._model = None
+                self._load()
+                results = self._model.predict(
+                    source=frame,
+                    conf=self.cfg.conf,
+                    iou=self.cfg.iou,
+                    classes=[self.cfg.person_class_id],
+                    device="cpu",
+                    verbose=False,
+                )
+            else:
+                raise
         if not results:
             return []
 
