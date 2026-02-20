@@ -47,12 +47,16 @@ class BlendConfig(BaseModel):
 
 
 class Stage2Config(BaseModel):
-    seg_model: str = "yolov8n-seg.pt"
+    # SAM3 path from workflow reference. If not loadable, falls back to YOLO-seg backend.
+    sam3_model_path: str = "models/sam3/sam3.pt"
+    seg_model_fallback: str = "yolov8n-seg.pt"
     seg_conf: float = Field(default=0.25, ge=0.0, le=1.0)
     mask_blur: int = Field(default=13, ge=1)
-    overlay_alpha: float = Field(default=0.95, ge=0.0, le=1.0)
-    min_mask_pixels: int = Field(default=500, ge=1)
-    use_bbox_mask_fallback: bool = True
+    overlay_alpha: float = Field(default=0.82, ge=0.0, le=1.0)
+    min_mask_pixels: int = Field(default=1200, ge=1)
+    use_bbox_mask_fallback: bool = False
+    skip_stage1_when_stage2: bool = True
+    require_gpu: bool = True
 
 
 class RenderConfig(BaseModel):

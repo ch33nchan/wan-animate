@@ -15,7 +15,6 @@ from tqdm import tqdm
 from src.config.schema import PipelineConfig, load_config
 from src.pipeline.blend import temporal_smooth_frame
 from src.pipeline.detect_track import TrackingResult, run_detection_tracking
-from src.pipeline.face_swap import InsightFaceSwapper
 from src.pipeline.full_character import FullCharacterReplacer
 from src.pipeline.gemini_select import GeminiSelectionResult, choose_target_track
 from src.pipeline.ingest import decode_video, sample_keyframe_indices
@@ -124,15 +123,21 @@ def main() -> None:
 
     t3 = time.perf_counter()
 
-    swapper = InsightFaceSwapper(config.swap, device=args.device)
-    swapper.load(args.ref)
-    stage1_frames, swapped_count = _swap_stage1(
-        frames=frames,
-        tracking=tracking,
-        target_track_id=selection.selected_track_id,
-        swapper=swapper,
-        temporal_alpha=config.blend.temporal_alpha,
-    )
+    swapped_count = 0
+    if args.mode == "stage2" and config.stage2.skip_stage1_when_stage2:
+        stage1_frames = frames
+    else:
+        from src.pipeline.face_swap import InsightFaceSwapper
+
+        swapper = InsightFaceSwapper(config.swap, device=args.device)
+        swapper.load(args.ref)
+        stage1_frames, swapped_count = _swap_stage1(
+            frames=frames,
+            tracking=tracking,
+            target_track_id=selection.selected_track_id,
+            swapper=swapper,
+            temporal_alpha=config.blend.temporal_alpha,
+        )
     t4 = time.perf_counter()
 
     stage2_events = []
@@ -142,6 +147,7 @@ def main() -> None:
         stage2 = FullCharacterReplacer(
             stage2_cfg=config.stage2,
             fallback_cfg=config.fallback,
+            gemini_cfg=config.gemini,
             temporal_alpha=config.blend.temporal_alpha,
             device=args.device,
         )
@@ -150,6 +156,8 @@ def main() -> None:
             tracking_result=tracking,
             target_track_id=selection.selected_track_id,
             ref_image_path=args.ref,
+            target_description=args.target,
+            api_key_env_var=args.gemini_api_key_env,
         )
 
     t5 = time.perf_counter()
@@ -197,6 +205,7 @@ def main() -> None:
         },
         "stage2": {
             "enabled": args.mode == "stage2",
+            "seg_backend": stage2.seg_backend if args.mode == "stage2" else "",
             "replaced_frames": stage2_replaced_frames,
             "fallback_events": [event.__dict__ for event in stage2_events],
         },

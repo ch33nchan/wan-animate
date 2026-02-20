@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.config.schema import FallbackConfig, Stage2Config
+from src.config.schema import FallbackConfig, GeminiConfig, Stage2Config
 from src.pipeline.full_character import FullCharacterReplacer
 from src.pipeline.detect_track import TrackingResult
 
@@ -12,6 +12,7 @@ def test_stage2_returns_original_when_target_missing() -> None:
     replacer = FullCharacterReplacer(
         stage2_cfg=Stage2Config(),
         fallback_cfg=FallbackConfig(),
+        gemini_cfg=GeminiConfig(enabled=False),
         temporal_alpha=0.7,
         device="cpu",
     )
@@ -21,6 +22,8 @@ def test_stage2_returns_original_when_target_missing() -> None:
         tracking_result=tracking,
         target_track_id=1,
         ref_image_path="/tmp/nonexistent.png",
+        target_description="main character",
+        api_key_env_var="GEMINI_API_KEY",
     )
 
     assert replaced == 0
