@@ -1,0 +1,10 @@
+stage2:
+  sam3_model_path: sam2.1_b.pt
+  seg_model_fallback: yolov8n-seg.pt
+  skip_stage1_when_stage2: true
+  require_gpu: true
+  seg_conf: 0.05
+  use_bbox_mask_fallback: true
+  min_mask_pixels: 200
+  overlay_alpha: 0.78
+  mask_blur: 17

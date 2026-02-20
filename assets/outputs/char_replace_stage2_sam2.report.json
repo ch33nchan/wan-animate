@@ -1,0 +1,60 @@
+{
+  "input": {
+    "video": "/mnt/data1/srini/ComfyUI/input/13.mp4",
+    "ref": "/mnt/data1/srini/ComfyUI/input/char_ref.png",
+    "target": "main guy wearing suit",
+    "mode": "stage2",
+    "max_frames": null,
+    "seed": 890143635
+  },
+  "video": {
+    "fps": 25.0,
+    "width": 720,
+    "height": 1280,
+    "decoded_frames": 33,
+    "source_total_frames": 33,
+    "duration_sec": 1.32
+  },
+  "selection": {
+    "selected_track_id": 1,
+    "used_gemini": true,
+    "reason": "gemini_success",
+    "candidates": [
+      1,
+      2
+    ],
+    "keyframes": [
+      0,
+      16,
+      32
+    ]
+  },
+  "stage1": {
+    "swapped_frames": 0,
+    "track_hits": 33
+  },
+  "stage2": {
+    "enabled": true,
+    "seg_backend": "sam",
+    "replaced_frames": 33,
+    "fallback_events": []
+  },
+  "timing_sec": {
+    "decode": 0.13122283201664686,
+    "detect_track": 3.6413968056440353,
+    "gemini_select": 2.642535137012601,
+    "face_swap": 3.315974026918411e-05,
+    "stage2": 8.142185300588608,
+    "render": 0.18954439088702202,
+    "total": 14.746917625889182
+  },
+  "runtime": {
+    "onnxruntime_providers": [
+      "TensorrtExecutionProvider",
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "cuda_visible_devices": "0"
+  },
+  "output_video": "/mnt/data1/srini/wan-animate/assets/outputs/char_replace_stage2_sam2.mp4"
+}
