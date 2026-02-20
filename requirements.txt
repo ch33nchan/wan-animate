@@ -1,2 +1,10 @@
+opencv-python>=4.10,<5
 numpy>=1.26,<3
-Pillow>=10,<12
+onnxruntime-gpu>=1.19,<2
+insightface>=0.7,<1
+ultralytics>=8.3,<9
+filterpy>=1.4,<2
+PyYAML>=6,<7
+pydantic>=2.8,<3
+tqdm>=4.66,<5
+pytest>=8.3,<9
