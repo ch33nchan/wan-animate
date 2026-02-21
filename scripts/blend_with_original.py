@@ -168,14 +168,38 @@ class SAM2MaskProvider:
         self.prev_bbox: Optional[np.ndarray] = None
         self.prev_mask: Optional[np.ndarray] = None
 
+    @staticmethod
+    def _is_cuda_oom(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return "out of memory" in msg or "cudaerrormemoryallocation" in msg or "cuda error" in msg
+
+    @staticmethod
+    def _empty_cuda_cache() -> None:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+    def _predict_with_fallback(self, model, **kwargs):
+        try:
+            return model.predict(**kwargs, device=self.device, verbose=False)
+        except Exception as exc:
+            if self.device != "cpu" and self._is_cuda_oom(exc):
+                self._empty_cuda_cache()
+                self.device = "cpu"
+                return model.predict(**kwargs, device="cpu", verbose=False)
+            raise
+
     def get_mask(self, frame_bgr: np.ndarray) -> np.ndarray:
-        det = self.detector.predict(
+        det = self._predict_with_fallback(
+            self.detector,
             source=frame_bgr,
             classes=[0],
             conf=self.det_conf,
             imgsz=self.img_size,
-            device=self.device,
-            verbose=False,
         )[0]
 
         if det.boxes is None or len(det.boxes) == 0:
@@ -191,11 +215,10 @@ class SAM2MaskProvider:
         y2 = int(clamp(int(round(target[3])), y1 + 1, frame_bgr.shape[0]))
         bbox = [x1, y1, x2, y2]
 
-        seg = self.segmenter.predict(
+        seg = self._predict_with_fallback(
+            self.segmenter,
             source=frame_bgr,
             bboxes=[bbox],
-            device=self.device,
-            verbose=False,
         )[0]
 
         mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
