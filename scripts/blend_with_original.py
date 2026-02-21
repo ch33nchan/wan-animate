@@ -101,12 +101,130 @@ def keep_largest_component(mask: np.ndarray, min_area: int) -> np.ndarray:
     return out
 
 
+def _bbox_iou(a: np.ndarray, b: np.ndarray) -> float:
+    x1 = max(float(a[0]), float(b[0]))
+    y1 = max(float(a[1]), float(b[1]))
+    x2 = min(float(a[2]), float(b[2]))
+    y2 = min(float(a[3]), float(b[3]))
+    inter_w = max(0.0, x2 - x1)
+    inter_h = max(0.0, y2 - y1)
+    inter = inter_w * inter_h
+    area_a = max(1.0, (float(a[2]) - float(a[0])) * (float(a[3]) - float(a[1])))
+    area_b = max(1.0, (float(b[2]) - float(b[0])) * (float(b[3]) - float(b[1])))
+    return inter / (area_a + area_b - inter + 1e-6)
+
+
+def _select_target_bbox(
+    bboxes: np.ndarray,
+    confs: np.ndarray,
+    frame_w: int,
+    frame_h: int,
+    prev_bbox: Optional[np.ndarray],
+) -> np.ndarray:
+    center = np.array([frame_w * 0.5, frame_h * 0.5], dtype=np.float32)
+    diag = float(np.hypot(frame_w, frame_h)) + 1e-6
+
+    best_idx = 0
+    best_score = -1e9
+    for i in range(bboxes.shape[0]):
+        box = bboxes[i]
+        cx = (box[0] + box[2]) * 0.5
+        cy = (box[1] + box[3]) * 0.5
+        dist_score = 1.0 - (float(np.hypot(cx - center[0], cy - center[1])) / diag)
+        area = max(1.0, (box[2] - box[0]) * (box[3] - box[1]))
+        area_score = min(1.0, area / float(frame_w * frame_h))
+        conf_score = float(confs[i])
+
+        score = 0.45 * dist_score + 0.35 * conf_score + 0.20 * area_score
+        if prev_bbox is not None:
+            score += 0.70 * _bbox_iou(box, prev_bbox)
+
+        if score > best_score:
+            best_score = score
+            best_idx = i
+
+    return bboxes[best_idx]
+
+
+class SAM2MaskProvider:
+    def __init__(
+        self,
+        detector_model: str,
+        sam2_model: str,
+        device: str,
+        det_conf: float,
+        img_size: int,
+    ):
+        try:
+            from ultralytics import SAM, YOLO
+        except Exception as exc:
+            raise RuntimeError("ultralytics is required for --mask_mode sam2") from exc
+
+        self.detector = YOLO(detector_model)
+        self.segmenter = SAM(sam2_model)
+        self.device = device
+        self.det_conf = det_conf
+        self.img_size = img_size
+        self.prev_bbox: Optional[np.ndarray] = None
+        self.prev_mask: Optional[np.ndarray] = None
+
+    def get_mask(self, frame_bgr: np.ndarray) -> np.ndarray:
+        det = self.detector.predict(
+            source=frame_bgr,
+            classes=[0],
+            conf=self.det_conf,
+            imgsz=self.img_size,
+            device=self.device,
+            verbose=False,
+        )[0]
+
+        if det.boxes is None or len(det.boxes) == 0:
+            return self.prev_mask.copy() if self.prev_mask is not None else np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+
+        boxes = det.boxes.xyxy.detach().cpu().numpy().astype(np.float32)
+        confs = det.boxes.conf.detach().cpu().numpy().astype(np.float32)
+        target = _select_target_bbox(boxes, confs, frame_bgr.shape[1], frame_bgr.shape[0], self.prev_bbox)
+
+        x1 = int(clamp(int(round(target[0])), 0, frame_bgr.shape[1] - 1))
+        y1 = int(clamp(int(round(target[1])), 0, frame_bgr.shape[0] - 1))
+        x2 = int(clamp(int(round(target[2])), x1 + 1, frame_bgr.shape[1]))
+        y2 = int(clamp(int(round(target[3])), y1 + 1, frame_bgr.shape[0]))
+        bbox = [x1, y1, x2, y2]
+
+        seg = self.segmenter.predict(
+            source=frame_bgr,
+            bboxes=[bbox],
+            device=self.device,
+            verbose=False,
+        )[0]
+
+        mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+        if seg.masks is not None and seg.masks.data is not None and len(seg.masks.data) > 0:
+            m = seg.masks.data[0].detach().cpu().numpy()
+            mask = (m > 0.5).astype(np.uint8) * 255
+
+        if mask.sum() == 0 and self.prev_mask is not None:
+            mask = self.prev_mask.copy()
+
+        self.prev_bbox = np.array([x1, y1, x2, y2], dtype=np.float32)
+        self.prev_mask = mask.copy()
+        return mask
+
+
 def run() -> None:
-    parser = argparse.ArgumentParser(description="Blend generated target back into original video using mask")
+    parser = argparse.ArgumentParser(description="Blend generated target back into original video")
     parser.add_argument("--original", required=True, help="Original source video")
     parser.add_argument("--generated", required=True, help="Generated WAN output video")
-    parser.add_argument("--mask", required=True, help="Mask video from preprocess (src_mask.mp4)")
+    parser.add_argument("--mask", default="", help="Mask video path when --mask_mode video")
+    parser.add_argument("--mask_mode", choices=["video", "sam2"], default="video")
     parser.add_argument("--out", required=True, help="Final composited output video")
+
+    parser.add_argument("--detector_model", default="yolov8n.pt")
+    parser.add_argument("--sam2_model", default="sam2.1_b.pt")
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--det_conf", type=float, default=0.20)
+    parser.add_argument("--img_size", type=int, default=960)
+
     parser.add_argument("--edge_blur", type=int, default=21)
     parser.add_argument("--mask_dilate", type=int, default=5)
     parser.add_argument("--mask_erode", type=int, default=1)
@@ -119,9 +237,12 @@ def run() -> None:
     parser.add_argument("--keep_audio", action="store_true")
     args = parser.parse_args()
 
+    if args.mask_mode == "video" and not args.mask:
+        raise RuntimeError("--mask is required when --mask_mode video")
+
     orig_info = get_stream_info(args.original)
     gen_info = get_stream_info(args.generated)
-    mask_info = get_stream_info(args.mask)
+    mask_info = get_stream_info(args.mask) if args.mask_mode == "video" else None
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     tmp_out = args.out if not args.keep_audio else args.out + ".video_only.mp4"
@@ -140,7 +261,18 @@ def run() -> None:
         raise RuntimeError(f"Cannot open original video: {args.original}")
 
     gen_fetcher = SequentialFrameFetcher(args.generated)
-    mask_fetcher = SequentialFrameFetcher(args.mask)
+    mask_fetcher = SequentialFrameFetcher(args.mask) if args.mask_mode == "video" else None
+    sam_provider = (
+        SAM2MaskProvider(
+            detector_model=args.detector_model,
+            sam2_model=args.sam2_model,
+            device=args.device,
+            det_conf=args.det_conf,
+            img_size=args.img_size,
+        )
+        if args.mask_mode == "sam2"
+        else None
+    )
 
     k_blur = args.edge_blur if args.edge_blur % 2 == 1 else args.edge_blur + 1
     kernel_d = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (args.mask_dilate, args.mask_dilate))
@@ -158,12 +290,9 @@ def run() -> None:
 
         t = frame_idx / max(orig_info.fps, 1e-6)
         gen_idx = clamp(int(round(t * gen_info.fps)), 0, max(gen_info.frame_count - 1, 0))
-        mask_idx = clamp(int(round(t * mask_info.fps)), 0, max(mask_info.frame_count - 1, 0))
-
         gen = gen_fetcher.get(gen_idx)
-        msk = mask_fetcher.get(mask_idx)
 
-        if gen is None or msk is None:
+        if gen is None:
             writer.write(orig)
             frame_idx += 1
             pbar.update(1)
@@ -171,11 +300,22 @@ def run() -> None:
 
         if gen.shape[:2] != orig.shape[:2]:
             gen = cv2.resize(gen, (orig.shape[1], orig.shape[0]), interpolation=cv2.INTER_CUBIC)
-        if msk.shape[:2] != orig.shape[:2]:
-            msk = cv2.resize(msk, (orig.shape[1], orig.shape[0]), interpolation=cv2.INTER_LINEAR)
 
-        msk_gray = cv2.cvtColor(msk, cv2.COLOR_BGR2GRAY) if msk.ndim == 3 else msk
-        _, m = cv2.threshold(msk_gray, args.mask_threshold, 255, cv2.THRESH_BINARY)
+        if args.mask_mode == "video":
+            mask_idx = clamp(int(round(t * float(mask_info.fps))), 0, max(mask_info.frame_count - 1, 0))
+            msk = mask_fetcher.get(mask_idx)
+            if msk is None:
+                writer.write(orig)
+                frame_idx += 1
+                pbar.update(1)
+                continue
+            if msk.shape[:2] != orig.shape[:2]:
+                msk = cv2.resize(msk, (orig.shape[1], orig.shape[0]), interpolation=cv2.INTER_LINEAR)
+            msk_gray = cv2.cvtColor(msk, cv2.COLOR_BGR2GRAY) if msk.ndim == 3 else msk
+            _, m = cv2.threshold(msk_gray, args.mask_threshold, 255, cv2.THRESH_BINARY)
+        else:
+            m = sam_provider.get_mask(orig)
+
         min_area = int(orig.shape[0] * orig.shape[1] * args.min_component_area_ratio)
         m = keep_largest_component(m, min_area=min_area)
 
@@ -213,7 +353,8 @@ def run() -> None:
     writer.release()
     orig_cap.release()
     gen_fetcher.close()
-    mask_fetcher.close()
+    if mask_fetcher is not None:
+        mask_fetcher.close()
 
     if args.keep_audio:
         subprocess.run(
