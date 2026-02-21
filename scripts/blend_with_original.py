@@ -151,6 +151,7 @@ class SAM2MaskProvider:
         self,
         detector_model: str,
         sam2_model: str,
+        seg_model: str,
         device: str,
         det_conf: float,
         img_size: int,
@@ -162,6 +163,7 @@ class SAM2MaskProvider:
 
         self.detector = YOLO(detector_model)
         self.segmenter = SAM(sam2_model)
+        self.seg_model = YOLO(seg_model) if seg_model else None
         self.device = device
         self.det_conf = det_conf
         self.img_size = img_size
@@ -226,12 +228,48 @@ class SAM2MaskProvider:
             m = seg.masks.data[0].detach().cpu().numpy()
             mask = (m > 0.5).astype(np.uint8) * 255
 
+        # SAM occasionally returns near-rectangular box masks; fallback to YOLO-seg person mask.
+        if self.seg_model is not None and self._is_boxy(mask):
+            seg_fallback = self._predict_with_fallback(
+                self.seg_model,
+                source=frame_bgr,
+                classes=[0],
+                conf=max(0.1, self.det_conf * 0.8),
+                imgsz=self.img_size,
+            )[0]
+            if seg_fallback.masks is not None and seg_fallback.masks.data is not None and len(seg_fallback.masks.data) > 0:
+                boxes_f = (
+                    seg_fallback.boxes.xyxy.detach().cpu().numpy().astype(np.float32)
+                    if seg_fallback.boxes is not None and len(seg_fallback.boxes) > 0
+                    else np.zeros((0, 4), dtype=np.float32)
+                )
+                if boxes_f.shape[0] > 0:
+                    ious = np.array([_bbox_iou(b, np.array(bbox, dtype=np.float32)) for b in boxes_f], dtype=np.float32)
+                    best_i = int(np.argmax(ious))
+                    if ious[best_i] > 0.1:
+                        m2 = seg_fallback.masks.data[best_i].detach().cpu().numpy()
+                        mask2 = (m2 > 0.5).astype(np.uint8) * 255
+                        if int(mask2.sum()) > 0:
+                            mask = mask2
+
         if mask.sum() == 0 and self.prev_mask is not None:
             mask = self.prev_mask.copy()
 
         self.prev_bbox = np.array([x1, y1, x2, y2], dtype=np.float32)
         self.prev_mask = mask.copy()
         return mask
+
+    @staticmethod
+    def _is_boxy(mask: np.ndarray) -> bool:
+        ys, xs = np.where(mask > 0)
+        if xs.size < 64:
+            return False
+        x1, x2 = int(xs.min()), int(xs.max())
+        y1, y2 = int(ys.min()), int(ys.max())
+        box_area = max(1, (x2 - x1 + 1) * (y2 - y1 + 1))
+        mask_area = int((mask > 0).sum())
+        fill = mask_area / float(box_area)
+        return fill > 0.84
 
 
 def run() -> None:
@@ -244,6 +282,7 @@ def run() -> None:
 
     parser.add_argument("--detector_model", default="yolov8n.pt")
     parser.add_argument("--sam2_model", default="sam2.1_b.pt")
+    parser.add_argument("--seg_model", default="yolov8n-seg.pt")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--det_conf", type=float, default=0.20)
     parser.add_argument("--img_size", type=int, default=960)
@@ -257,6 +296,7 @@ def run() -> None:
     parser.add_argument("--alpha_scale", type=float, default=0.95)
     parser.add_argument("--temporal_alpha", type=float, default=0.80)
     parser.add_argument("--protect_bottom_ratio", type=float, default=0.16)
+    parser.add_argument("--diff_threshold", type=float, default=16.0)
     parser.add_argument("--keep_audio", action="store_true")
     args = parser.parse_args()
 
@@ -289,6 +329,7 @@ def run() -> None:
         SAM2MaskProvider(
             detector_model=args.detector_model,
             sam2_model=args.sam2_model,
+            seg_model=args.seg_model,
             device=args.device,
             det_conf=args.det_conf,
             img_size=args.img_size,
@@ -344,7 +385,10 @@ def run() -> None:
 
         max_cov = max(0.05, min(1.0, args.max_row_coverage))
         row_coverage = (m > 0).mean(axis=1)
-        m[row_coverage > max_cov, :] = 0
+        if max_cov < 0.999:
+            high_rows = row_coverage > max_cov
+            if np.any(high_rows):
+                m[high_rows, :] = (m[high_rows, :] * 0.35).astype(np.uint8)
 
         if args.mask_erode > 1:
             m = cv2.erode(m, kernel_e, iterations=1)
@@ -353,6 +397,13 @@ def run() -> None:
 
         m = cv2.GaussianBlur(m, (k_blur, k_blur), 0)
         alpha = (m.astype(np.float32) / 255.0) * args.alpha_scale
+
+        # Constrain blend to truly changed regions to avoid rectangular/halo artifacts.
+        diff = np.mean(np.abs(gen.astype(np.float32) - orig.astype(np.float32)), axis=2)
+        diff_mask = np.where(diff > args.diff_threshold, 255, 0).astype(np.uint8)
+        diff_mask = cv2.morphologyEx(diff_mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+        diff_mask = cv2.GaussianBlur(diff_mask, (9, 9), 0)
+        alpha *= (diff_mask.astype(np.float32) / 255.0)
 
         protect_h = int(orig.shape[0] * args.protect_bottom_ratio)
         if protect_h > 0:
