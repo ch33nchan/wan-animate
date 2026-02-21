@@ -80,6 +80,27 @@ def color_match_in_mask(src_bgr: np.ndarray, dst_bgr: np.ndarray, mask: np.ndarr
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def keep_largest_component(mask: np.ndarray, min_area: int) -> np.ndarray:
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if num_labels <= 1:
+        return mask
+
+    best_label = 0
+    best_area = 0
+    for label in range(1, num_labels):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area >= min_area and area > best_area:
+            best_area = area
+            best_label = label
+
+    if best_label == 0:
+        return np.zeros_like(mask)
+
+    out = np.zeros_like(mask)
+    out[labels == best_label] = 255
+    return out
+
+
 def run() -> None:
     parser = argparse.ArgumentParser(description="Blend generated target back into original video using mask")
     parser.add_argument("--original", required=True, help="Original source video")
@@ -89,6 +110,9 @@ def run() -> None:
     parser.add_argument("--edge_blur", type=int, default=21)
     parser.add_argument("--mask_dilate", type=int, default=5)
     parser.add_argument("--mask_erode", type=int, default=1)
+    parser.add_argument("--mask_threshold", type=int, default=96)
+    parser.add_argument("--min_component_area_ratio", type=float, default=0.01)
+    parser.add_argument("--max_row_coverage", type=float, default=0.65)
     parser.add_argument("--alpha_scale", type=float, default=0.95)
     parser.add_argument("--temporal_alpha", type=float, default=0.80)
     parser.add_argument("--protect_bottom_ratio", type=float, default=0.16)
@@ -151,7 +175,13 @@ def run() -> None:
             msk = cv2.resize(msk, (orig.shape[1], orig.shape[0]), interpolation=cv2.INTER_LINEAR)
 
         msk_gray = cv2.cvtColor(msk, cv2.COLOR_BGR2GRAY) if msk.ndim == 3 else msk
-        _, m = cv2.threshold(msk_gray, 12, 255, cv2.THRESH_BINARY)
+        _, m = cv2.threshold(msk_gray, args.mask_threshold, 255, cv2.THRESH_BINARY)
+        min_area = int(orig.shape[0] * orig.shape[1] * args.min_component_area_ratio)
+        m = keep_largest_component(m, min_area=min_area)
+
+        max_cov = max(0.05, min(1.0, args.max_row_coverage))
+        row_coverage = (m > 0).mean(axis=1)
+        m[row_coverage > max_cov, :] = 0
 
         if args.mask_erode > 1:
             m = cv2.erode(m, kernel_e, iterations=1)
